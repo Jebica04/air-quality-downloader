@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Air Quality Data Downloader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .form-container {
+            padding: 40px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 1.1em;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #4facfe;
+            box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.1);
+        }
+
+        .device-manager {
+            margin-top: 15px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #4facfe;
+        }
+
+        .device-manager h4 {
+            margin: 0 0 15px 0;
+            font-size: 1.2em;
+            color: #333;
+        }
+
+        .device-input-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .device-input-row input {
+            flex: 1;
+        }
+
+        .device-input-row .btn {
+            flex: 0 0 auto;
+            padding: 12px 20px;
+            font-size: 14px;
+        }
+
+        .device-controls {
+            margin-top: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .radio-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 10px 15px;
+            border-radius: 8px;
+            transition: background-color 0.3s ease;
+        }
+
+        .radio-item:hover {
+            background-color: #f0f0f0;
+        }
+
+        .radio-item input[type="radio"] {
+            width: 18px;
+            height: 18px;
+        }
+
+        .time-inputs {
+            display: none;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .time-inputs.show {
+            display: grid;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            flex: 1;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            flex: 1;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%);
+            color: white;
+        }
+
+        .btn-small {
+            background: #6c757d;
+            color: white;
+            padding: 10px 16px;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            background: #ccc !important;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            opacity: 0.7;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            border: 1px solid transparent;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-color: #f5c6cb;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-color: #c3e6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-color: #bee5eb;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border-color: #ffeaa7;
+        }
+
+        .preview-section {
+            margin-top: 40px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .preview-section.show {
+            display: block;
+        }
+
+        .preview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .preview-table th,
+        .preview-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 0.9em;
+        }
+
+        .preview-table th {
+            background: #4facfe;
+            color: white;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+
+        .preview-table tr:hover {
+            background: #f5f5f5;
+        }
+
+        .preview-table td {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 30px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4facfe;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        .spinner-text {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .device-status {
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 0.9em;
+            display: inline-block;
+        }
+
+        .device-status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .device-status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .form-note {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+            }
+            
+            .form-container {
+                padding: 20px;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .time-inputs {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .device-input-row {
+                flex-direction: column;
+            }
+
+            .device-controls {
+                flex-direction: column;
+                gap: 10px;
+                align-items: stretch;
+            }
+
+            .preview-header {
+                flex-direction: column;
+                gap: 10px;
+                align-items: stretch;
+            }
+
+            .preview-table {
+                font-size: 0.8em;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .time-inputs {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌬️ Air Quality Data Downloader</h1>
+            <p>Download and analyze air quality measurements from your devices</p>
+        </div>
+
+        <div class="form-container">
+            <div id="alerts"></div>
+
+            <form id="dataForm">
+                <div class="form-group">
+                    <label for="device_mac">Select Device:</label>
+                    <select id="device_mac" name="device_mac" class="form-control">
+                        <option value="">Loading saved devices...</option>
+                    </select>
+                    <div class="form-note">Choose from your saved devices or add a new one below</div>
+                    
+                    <div class="device-manager">
+                        <h4>🔧 Device Management</h4>
+                        <div class="device-input-row">
+                            <input type="text" id="new_mac" class="form-control" 
+                                   placeholder="MAC address (e.g., aa:bb:cc:dd:ee:ff)"
+                                   pattern="^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$">
+                            <input type="text" id="new_name" class="form-control" 
+                                   placeholder="Device name (optional)">
+                            <button type="button" id="test_device_btn" class="btn btn-small">
+                                🧪 Test
+                            </button>
+                            <button type="button" id="save_device_btn" class="btn btn-small btn-success" disabled>
+                                💾 Save
+                            </button>
+                        </div>
+                        <div id="test_result" style="font-size: 0.9em; margin-top: 10px;"></div>
+                        <div id="test_progress" class="progress-bar" style="display: none;">
+                            <div class="progress-fill"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="device-controls">
+                        <div id="device_status" class="device-status">No devices loaded</div>
+                        <button type="button" id="remove_device_btn" class="btn btn-small btn-danger" disabled>
+                            🗑️ Remove Selected
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>📊 Data Type:</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" id="latest" name="data_type" value="latest" checked>
+                            <label for="latest">Latest Data (Most Recent)</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" id="time_range" name="data_type" value="time_range">
+                            <label for="time_range">Time Range Data</label>
+                        </div>
+                    </div>
+                    <div class="form-note">Choose latest reading or specify a time range with dates</div>
+
+                    <div id="timeInputs" class="time-inputs">
+                        <div>
+                            <label for="start_date">📅 Start Date:</label>
+                            <input type="date" id="start_date" name="start_date" class="form-control">
+                            <div class="form-note">Starting date</div>
+                        </div>
+                        <div>
+                            <label for="end_date">📅 End Date:</label>
+                            <input type="date" id="end_date" name="end_date" class="form-control">
+                            <div class="form-note">Ending date</div>
+                        </div>
+                        <div>
+                            <label for="hours_from">⏰ Start Hour (0-23):</label>
+                            <input type="number" id="hours_from" name="hours_from" class="form-control" 
+                                   min="0" max="23" placeholder="e.g., 8" value="0">
+                            <div class="form-note">Starting hour of the day</div>
+                        </div>
+                        <div>
+                            <label for="hours_to">⏰ End Hour (0-23):</label>
+                            <input type="number" id="hours_to" name="hours_to" class="form-control" 
+                                   min="0" max="23" placeholder="e.g., 18" value="23">
+                            <div class="form-note">Ending hour of the day</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button type="button" id="previewBtn" class="btn btn-secondary">
+                        👁️ Preview Data
+                    </button>
+                    <button type="button" id="downloadBtn" class="btn btn-primary">
+                        📥 Download CSV
+                    </button>
+                </div>
+            </form>
+
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <div class="spinner-text">Processing your request...</div>
+            </div>
+
+            <div id="previewSection" class="preview-section">
+                <div class="preview-header">
+                    <h3 style="margin: 0; color: #333;">📋 Data Preview</h3>
+                    <div style="display: flex; gap: 15px; align-items: center;">
+                        <span id="recordCount" style="color: #666; font-size: 0.9em;"></span>
+                        <button type="button" id="closePreviewBtn" class="btn btn-small" style="padding: 5px 10px;">
+                            ✕ Close
+                        </button>
+                    </div>
+                </div>
+                <div id="previewContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Include the JavaScript file -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
