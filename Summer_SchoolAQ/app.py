@@ -177,21 +177,6 @@ class AirQualityAPI:
         except Exception as e:
             print(f"Error getting device coordinates: {e}")
             return 45.7613, 21.2513
-        """Convert AQI numeric value to descriptive level"""
-        if aqi_value is None or aqi_value < 0:
-            return "No Data"
-        elif aqi_value <= 50:
-            return "Good"
-        elif aqi_value <= 100:
-            return "Moderate"
-        elif aqi_value <= 150:
-            return "Unhealthy for Sensitive Groups"
-        elif aqi_value <= 200:
-            return "Unhealthy"
-        elif aqi_value <= 300:
-            return "Very Unhealthy"
-        else:
-            return "Hazardous"
     
     def get_hourly_data(self, mac, hours_from, hours_to):
         """Get hourly data using the 24h endpoint with proper data processing"""
