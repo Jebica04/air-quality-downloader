@@ -584,3 +584,50 @@ document.addEventListener('keydown', function(e) {
         document.getElementById('downloadBtn').click();
     }
 });
+
+async function startScan() {
+    const base_mac = document.getElementById('base_mac').value;
+    const range_size = document.getElementById('range_size').value;
+
+    const res = await fetch('/api/scan_macs/start', {
+        method: 'POST',
+        body: new URLSearchParams({ base_mac, range_size })
+    });
+
+    const result = await res.json();
+    const statusEl = document.getElementById('scanStatus');
+    statusEl.style.display = 'block';
+    statusEl.className = 'alert ' + (result.success ? 'alert-success' : 'alert-error');
+    statusEl.innerText = result.success ? result.message : `❌ ${result.error}`;
+}
+
+async function fetchScanStatus() {
+    const res = await fetch('/api/scan_macs/status');
+    const status = await res.json();
+    const statusEl = document.getElementById('scanStatus');
+    statusEl.style.display = 'block';
+    statusEl.className = 'alert alert-info';
+    statusEl.innerText = `⏳ Progress: ${status.progress}/${status.total}, Current: ${status.current_mac}, Active found: ${status.active_found}`;
+}
+
+async function fetchScanResults() {
+    const res = await fetch('/api/scan_macs/results');
+    const data = await res.json();
+    const resultsEl = document.getElementById('resultsArea');
+    const container = document.getElementById('scanResultsContainer');
+    container.classList.add('show');
+
+    if (data.results) {
+        resultsEl.innerText = JSON.stringify(data.results, null, 2);
+    } else {
+        resultsEl.innerText = data.error || 'No results found.';
+    }
+}
+
+async function saveActiveMacs() {
+    const res = await fetch('/api/scan_macs/save_active', { method: 'POST' });
+    const result = await res.json();
+    alert(result.success ? result.message : `❌ ${result.error}`);
+    if (result.success) loadSavedDevices();  // Refresh dropdown
+}
+

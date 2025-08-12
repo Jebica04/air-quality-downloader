@@ -6,11 +6,149 @@ from datetime import datetime, timedelta
 import io
 import os
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 app = Flask(__name__)
 
 # Configuration
 API_BASE_URL = "http://airview.cs.upt.ro"
+
+# Global variable to track scanning status
+scanning_status = {
+    'in_progress': False,
+    'progress': 0,
+    'total': 0,
+    'active_found': 0,
+    'current_mac': '',
+    'results': []
+}
+
+class ActiveMACExtractor:
+    def __init__(self, base_url):
+        self.base_url = base_url.rstrip('/')
+        self.timeout = 10
+    
+    def test_single_mac(self, mac):
+        """Test if a single MAC address is active"""
+        try:
+            url = f"{self.base_url}/api/v1/data-intake/{quote(mac)}"
+            response = requests.get(url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data and isinstance(data, dict):
+                    # Check for essential air quality fields
+                    essential_fields = ['mac', 'timestamp', 't', 'pm25', 'pm10', 'iaq']
+                    found_fields = [field for field in essential_fields if field in data and data[field] is not None]
+                    
+                    if len(found_fields) >= 2:  # At least 2 essential fields present
+                        return {
+                            'mac': mac,
+                            'status': 'active',
+                            'last_update': data.get('timestamp'),
+                            'available_fields': list(data.keys()),
+                            'essential_fields_found': found_fields,
+                            'location': {
+                                'lat': data.get('lat') or data.get('latitude'),
+                                'lng': data.get('lng') or data.get('longitude')
+                            },
+                            'data_quality': 'good' if len(found_fields) >= 4 else 'limited',
+                            'sample_data': {
+                                't': data.get('t'),
+                                'pm25': data.get('pm25'),
+                                'pm10': data.get('pm10'),
+                                'iaq': data.get('iaq')
+                            }
+                        }
+                    else:
+                        return {
+                            'mac': mac,
+                            'status': 'inactive',
+                            'reason': 'insufficient_data',
+                            'available_fields': list(data.keys()) if data else []
+                        }
+                else:
+                    return {'mac': mac, 'status': 'inactive', 'reason': 'no_data'}
+            elif response.status_code == 404:
+                return {'mac': mac, 'status': 'not_found', 'reason': 'device_not_found'}
+            else:
+                return {'mac': mac, 'status': 'error', 'reason': f'http_{response.status_code}'}
+                
+        except requests.exceptions.Timeout:
+            return {'mac': mac, 'status': 'timeout', 'reason': 'connection_timeout'}
+        except requests.exceptions.ConnectionError:
+            return {'mac': mac, 'status': 'connection_error', 'reason': 'cannot_connect'}
+        except Exception as e:
+            return {'mac': mac, 'status': 'error', 'reason': str(e)}
+    
+    def scan_mac_range(self, base_mac, range_size=100, callback=None):
+        """Scan a range around a known working MAC address"""
+        try:
+            # Parse the base MAC
+            mac_parts = base_mac.split(":")
+            if len(mac_parts) != 6:
+                raise ValueError("Invalid MAC format")
+            
+            # Convert last two parts to integers for range scanning
+            base_fourth = int(mac_parts[4], 16)
+            base_fifth = int(mac_parts[5], 16)
+            
+            mac_list = []
+            prefix = ":".join(mac_parts[:4])
+            
+            # Generate range around the base MAC
+            for i in range(max(0, base_fourth - range_size//2), min(256, base_fourth + range_size//2)):
+                for j in range(max(0, base_fifth - range_size//2), min(256, base_fifth + range_size//2)):
+                    mac = f"{prefix}:{i:02X}:{j:02X}"
+                    mac_list.append(mac)
+            
+            return self.extract_active_macs_parallel(mac_list, max_workers=15, callback=callback)
+            
+        except Exception as e:
+            print(f"Error in range scan: {e}")
+            return []
+    
+    def extract_active_macs_parallel(self, mac_list, max_workers=15, callback=None):
+        """Extract active MACs using parallel processing"""
+        global scanning_status
+        
+        active_macs = []
+        total = len(mac_list)
+        
+        scanning_status.update({
+            'in_progress': True,
+            'progress': 0,
+            'total': total,
+            'active_found': 0,
+            'results': []
+        })
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_mac = {executor.submit(self.test_single_mac, mac): mac for mac in mac_list}
+            
+            # Process completed tasks
+            completed = 0
+            for future in as_completed(future_to_mac):
+                result = future.result()
+                completed += 1
+                
+                scanning_status['progress'] = completed
+                scanning_status['current_mac'] = result['mac']
+                
+                if result['status'] == 'active':
+                    active_macs.append(result)
+                    scanning_status['active_found'] = len(active_macs)
+                    print(f"✅ ACTIVE: {result['mac']} ({completed}/{total})")
+                
+                if callback:
+                    callback(result, completed, total)
+        
+        scanning_status['in_progress'] = False
+        scanning_status['results'] = active_macs
+        return active_macs
+
 
 class AirQualityAPI:
     def __init__(self, base_url):
@@ -415,8 +553,9 @@ class AirQualityAPI:
             print(f"Error fetching device data: {e}")
             return []
 
-# Initialize API client
+# Initialize API client and MAC scanner
 api_client = AirQualityAPI(API_BASE_URL)
+mac_scanner = ActiveMACExtractor(API_BASE_URL)
 
 def flatten_nested_dict(d, parent_key='', sep='_'):
     """Recursively flatten nested dictionaries"""
@@ -478,6 +617,156 @@ def convert_to_csv(data):
     except Exception as e:
         print(f"Error converting to CSV: {e}")
         return None
+
+def scan_macs_background(base_mac, range_size):
+    """Background function to scan MACs"""
+    try:
+        results = mac_scanner.scan_mac_range(base_mac, range_size)
+        print(f"Background scan completed: {len(results)} active MACs found")
+        
+        # Save results to file
+        scan_data = {
+            'scan_timestamp': datetime.now().isoformat(),
+            'base_mac': base_mac,
+            'range_size': range_size,
+            'total_active': len(results),
+            'results': results
+        }
+        
+        with open('mac_scan_results.json', 'w') as f:
+            json.dump(scan_data, f, indent=2)
+            
+    except Exception as e:
+        print(f"Error in background scan: {e}")
+        global scanning_status
+        scanning_status['in_progress'] = False
+
+# ============= NEW MAC SCANNER ROUTES =============
+
+@app.route('/api/scan_macs/start', methods=['POST'])
+def start_mac_scan():
+    """Start scanning for active MAC addresses"""
+    global scanning_status
+    
+    if scanning_status['in_progress']:
+        return jsonify({'error': 'Scan already in progress'}), 400
+    
+    try:
+        base_mac = request.form.get('base_mac', '00:A0:50:D3:74:F7')
+        range_size = int(request.form.get('range_size', 100))
+        
+        if range_size > 500:
+            return jsonify({'error': 'Range size too large (max 500)'}), 400
+        
+        # Start background thread
+        thread = threading.Thread(
+            target=scan_macs_background, 
+            args=(base_mac, range_size)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': f'MAC scan started for range {range_size} around {base_mac}',
+            'estimated_time': f'{range_size // 10} seconds'
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/scan_macs/status')
+def get_scan_status():
+    """Get current scanning status"""
+    global scanning_status
+    return jsonify(scanning_status)
+
+@app.route('/api/scan_macs/results')
+def get_scan_results():
+    """Get completed scan results"""
+    try:
+        if os.path.exists('mac_scan_results.json'):
+            with open('mac_scan_results.json', 'r') as f:
+                data = json.load(f)
+
+            if isinstance(data, dict) and "results" in data:
+                cleaned_results = [
+                    {k: v for k, v in entry.items() if k != "available_fields"}
+                    for entry in data["results"]
+                ]
+                data["results"] = cleaned_results
+
+            return jsonify(data)
+        else:
+            return jsonify({'error': 'No scan results found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scan_macs/test_single', methods=['POST'])
+def test_single_mac():
+    """Test a single MAC address"""
+    try:
+        mac = request.form.get('mac')
+        if not mac:
+            return jsonify({'error': 'MAC address required'}), 400
+        
+        result = mac_scanner.test_single_mac(mac)
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/scan_macs/save_active', methods=['POST'])
+def save_active_macs():
+    """Save all active MACs from scan results to saved devices"""
+    try:
+        if not os.path.exists('mac_scan_results.json'):
+            return jsonify({'error': 'No scan results found'}), 404
+        
+        with open('mac_scan_results.json', 'r') as f:
+            scan_data = json.load(f)
+        
+        active_macs = scan_data.get('results', [])
+        saved_count = 0
+        
+        for mac_info in active_macs:
+            if mac_info.get('status') == 'active':
+                mac = mac_info['mac']
+                # Generate a name based on data quality and fields
+                fields_count = len(mac_info.get('available_fields', []))
+                name = f"Discovered_{mac.replace(':', '')}_{fields_count}fields"
+                
+                if api_client.save_device(mac, name):
+                    saved_count += 1
+        
+        return jsonify({
+            'success': True,
+            'message': f'Saved {saved_count} active devices',
+            'saved_count': saved_count,
+            'total_active_found': len(active_macs)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+@app.route('/mac_results')
+def show_mac_results():
+    try:
+        with open('mac_scan_results.json', 'r') as f:
+            data = json.load(f)
+        results = data.get("results", [])
+        # Remove 'available_fields' from each entry (just in case)
+        cleaned_results = [
+            {k: v for k, v in entry.items() if k != "available_fields"}
+            for entry in results
+        ]
+        return render_template("mac_results.html", results=cleaned_results)
+    except Exception as e:
+        return f"Error loading MAC scan results: {e}", 500
+
+
+# ============= EXISTING ROUTES (unchanged) =============
 
 @app.route('/')
 def index():
