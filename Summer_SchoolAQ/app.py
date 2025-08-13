@@ -8,6 +8,9 @@ import os
 from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from math import radians, cos, sin, asin, sqrt
+from collections import defaultdict
+
 
 app = Flask(__name__)
 
@@ -641,6 +644,85 @@ def scan_macs_background(base_mac, range_size):
         global scanning_status
         scanning_status['in_progress'] = False
 
+def haversine(lat1, lon1, lat2, lon2):
+    """Calculate the great-circle distance between two points in meters."""
+    R = 6371000  # Earth radius in meters
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    return R * c
+
+def compute_movement_by_mac(data):
+    from collections import defaultdict
+
+    mac_locations = defaultdict(list)
+
+    # Group and collect by MAC
+    for entry in data:
+        mac = entry.get("mac")
+        location = entry.get("location")
+        timestamp = entry.get("last_update") or entry.get("timestamp")
+
+        if mac and location and timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                lat = location.get("lat")
+                lng = location.get("lng")
+                if lat is not None and lng is not None:
+                    mac_locations[mac].append((dt, lat, lng))
+            except Exception:
+                continue
+
+    # Determine mobility
+    result = {}
+    for mac, points in mac_locations.items():
+        # Sort points by time
+        points.sort(key=lambda x: x[0])
+        is_mobile = False
+
+        for i in range(len(points)):
+            t1, lat1, lon1 = points[i]
+            for j in range(i+1, len(points)):
+                t2, lat2, lon2 = points[j]
+                time_diff = abs((t2 - t1).total_seconds()) / 3600.0  # hours
+                if time_diff > 6:
+                    break  # Only compare within 6h
+                dist = haversine(lat1, lon1, lat2, lon2)
+                if dist > 100:
+                    is_mobile = True
+                    break
+            if is_mobile:
+                break
+
+        result[mac] = "mobile" if is_mobile else "static"
+    return result
+
+def load_mac_scan_data(filepath):
+    """Load and normalize MAC scan result data from JSON file."""
+    with open(filepath, 'r') as f:
+        raw_data = f.read()
+
+    try:
+        parsed = json.loads(raw_data)
+        # Case 1: Wrapped in a "results" key
+        if isinstance(parsed, dict) and "results" in parsed:
+            return parsed["results"]
+        # Case 2: Directly a list
+        elif isinstance(parsed, list):
+            return parsed
+        # Case 3: List as a string
+        elif isinstance(parsed, str):
+            inner_parsed = json.loads(parsed)
+            if isinstance(inner_parsed, list):
+                return inner_parsed
+        raise ValueError("Unexpected JSON structure")
+    except Exception as e:
+        raise ValueError(f"Failed to parse MAC scan JSON: {e}")
+
+
 # ============= NEW MAC SCANNER ROUTES =============
 
 @app.route('/api/scan_macs/start', methods=['POST'])
@@ -683,24 +765,36 @@ def get_scan_status():
 
 @app.route('/api/scan_macs/results')
 def get_scan_results():
-    """Get completed scan results"""
     try:
-        if os.path.exists('mac_scan_results.json'):
-            with open('mac_scan_results.json', 'r') as f:
-                data = json.load(f)
-
-            if isinstance(data, dict) and "results" in data:
-                cleaned_results = [
-                    {k: v for k, v in entry.items() if k != "available_fields"}
-                    for entry in data["results"]
-                ]
-                data["results"] = cleaned_results
-
-            return jsonify(data)
-        else:
+        if not os.path.exists('mac_scan_results.json'):
             return jsonify({'error': 'No scan results found'}), 404
+
+        try:
+            results = load_mac_scan_data('mac_scan_results.json')
+        except ValueError as ve:
+            return jsonify({'error': str(ve)}), 500
+
+        # Clean up and classify
+        cleaned_results = []
+        for entry in results:
+            if isinstance(entry, dict):
+                cleaned_entry = {k: v for k, v in entry.items() if k != "available_fields"}
+                cleaned_results.append(cleaned_entry)
+
+       # Compute mobility classification using "100m in 6h" rule
+        movement_map = compute_movement_by_mac(cleaned_results)
+
+        for entry in cleaned_results:
+            mac = entry.get("mac")
+            movement_status = movement_map.get(mac, "unknown")
+            entry["movement"] = movement_status
+
+        return jsonify({"results": cleaned_results})
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
 
 
 @app.route('/api/scan_macs/test_single', methods=['POST'])

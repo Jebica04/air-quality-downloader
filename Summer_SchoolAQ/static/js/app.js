@@ -631,3 +631,21 @@ async function saveActiveMacs() {
     if (result.success) loadSavedDevices();  // Refresh dropdown
 }
 
+function populateDeviceTable(data) {
+  const tableBody = document.getElementById('deviceTableBody');
+  tableBody.innerHTML = ''; // clear previous
+
+  data.results.forEach(device => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${device.mac}</td>
+      <td>${device.last_update || 'N/A'}</td>
+      <td>${device.measurement_count || 'N/A'}</td>
+      <td>${device.movement || 'unknown'}</td> <!-- 👈 New column -->
+    `;
+    tableBody.appendChild(row);
+  });
+}
+
+
+
