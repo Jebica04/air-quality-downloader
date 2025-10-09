@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sensor Grid Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    #map { height: 90vh; width: 100%; }
+  </style>
+</head>
+<body>
+  <h3 style="text-align:center;">Sensor Grid Coverage (Timisoara)</h3>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([45.757, 21.23], 13);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  // ✅ Add grid layer
+  // Add full grid (light gray squares)
+// Show full grid
+fetch('/api/grid/full')
+  .then(res => res.json())
+  .then(data => {
+    L.geoJSON(data, {
+      style: {
+        color: "#ccc",
+        weight: 1,
+        fillOpacity: 0.05
+      }
+    }).addTo(map);
+  });
+
+// Show coverage grid (cells with active sensors)
+fetch('/api/grid_coverage')
+  .then(res => res.json())
+  .then(data => {
+    L.geoJSON(data, {
+      style: {
+        color: "#007bff",       // Blue borders
+        weight: 2,
+        fillColor: "#007bff",   // Blue fill
+        fillOpacity: 0.3
+      }
+    }).addTo(map);
+  })
+
+
+/*  // Add this to load uncovered cells
+// Add red polygons for uncovered cells
+fetch('/api/uncovered_cells')
+  .then(res => res.json())
+  .then(data => {
+    const geoLayer = L.geoJSON(data, {
+      style: function () {
+        return {
+          color: '#8B0000',        // darker border
+          weight: 0.3,             // thin border
+          fillColor: '#FF0000',    // red fill
+          fillOpacity: 0.1         // light red (faded)
+        };
+      }
+    }).addTo(map);
+
+    map.fitBounds(geoLayer.getBounds());
+  }) */
+
+    .catch(err => console.error("Error loading grid coverage:", err));
+</script>
+</body>
+</html>

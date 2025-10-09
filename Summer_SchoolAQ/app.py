@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import json
 from datetime import datetime, timedelta
+from dateutil import parser
 import io
 import os
 from urllib.parse import quote
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from math import radians, cos, sin, asin, sqrt
 from collections import defaultdict
-
+import math
 
 app = Flask(__name__)
 
@@ -644,16 +645,14 @@ def scan_macs_background(base_mac, range_size):
         global scanning_status
         scanning_status['in_progress'] = False
 
-def haversine(lat1, lon1, lat2, lon2):
-    """Calculate the great-circle distance between two points in meters."""
-    R = 6371000  # Earth radius in meters
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371e3  # Earth radius in meters
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
 
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    return R * c
+    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 def compute_movement_by_mac(data):
     from collections import defaultdict
@@ -723,6 +722,115 @@ def load_mac_scan_data(filepath):
         raise ValueError(f"Failed to parse MAC scan JSON: {e}")
 
 
+def assign_grid_cell(lat, lon, step=0.009):
+    return (round(lat - (lat % step), 3), round(lon - (lon % step), 3))
+
+
+
+def generate_full_grid(min_lat=45.70, max_lat=45.82, min_lon=21.15, max_lon=21.35, step=0.009):
+    features = []
+
+    lat = min_lat
+    while lat < max_lat:
+        lon = min_lon
+        while lon < max_lon:
+            cell_lat = round(lat, 3)
+            cell_lon = round(lon, 3)
+            polygon = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [cell_lon, cell_lat],
+                        [cell_lon + step, cell_lat],
+                        [cell_lon + step, cell_lat + step],
+                        [cell_lon, cell_lat + step],
+                        [cell_lon, cell_lat]
+                    ]]
+                },
+                "properties": {
+                    "cell": f"{cell_lat},{cell_lon}"
+                }
+            }
+            features.append(polygon)
+            lon += step
+        lat += step
+
+    return {
+        "type": "FeatureCollection",
+        "features": features
+    }
+
+def grid_cell_to_geojson(cell, cell_size=0.009):  
+    """
+    Convert a grid cell (lat, lon) to a GeoJSON polygon.
+    cell_size ~ 0.009 degrees ~ 1km at Timisoara latitude.
+    """
+    lat, lon = cell
+    lat = float(lat)
+    lon = float(lon)
+
+    return {
+        "type": "Feature",
+        "properties": {
+            "cell": f"{lat},{lon}"
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+                [lon, lat],
+                [lon + cell_size, lat],
+                [lon + cell_size, lat + cell_size],
+                [lon, lat + cell_size],
+                [lon, lat]
+            ]]
+        }
+    }
+
+
+""" def haversine(lat1, lon1, lat2, lon2):
+    R = 6371000  # Earth radius in meters
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(delta_lambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def suggest_nearest_uncovered_cell(mobile_devices, uncovered_cells):
+    suggestions = []
+
+    for device in mobile_devices:
+        loc = device.get("location")
+        if not loc:
+            continue
+        lat, lon = loc.get("lat"), loc.get("lng")
+        if lat is None or lon is None:
+            continue
+
+        min_dist = float("inf")
+        nearest_cell = None
+
+        for cell in uncovered_cells:
+            cell_lat, cell_lon = cell
+            dist = haversine(lat, lon, cell_lat, cell_lon)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_cell = cell
+
+        suggestions.append({
+            "mac": device["mac"],
+            "last_location": {"lat": lat, "lon": lon},
+            "suggested_cell": nearest_cell,
+            "distance_meters": round(min_dist, 1)
+        })
+
+    return suggestions """
+
+
+
 # ============= NEW MAC SCANNER ROUTES =============
 
 @app.route('/api/scan_macs/start', methods=['POST'])
@@ -763,37 +871,36 @@ def get_scan_status():
     global scanning_status
     return jsonify(scanning_status)
 
+
+
 @app.route('/api/scan_macs/results')
 def get_scan_results():
+    """Get completed scan results with activity status"""
     try:
-        if not os.path.exists('mac_scan_results.json'):
+        if os.path.exists('mac_scan_results.json'):
+            with open('mac_scan_results.json', 'r') as f:
+                data = json.load(f)
+
+            now = datetime.utcnow()
+            threshold = timedelta(hours=1)
+            results = data.get("results", [])
+
+            # Inject "is_inactive" boolean into each device
+            for device in results:
+                last_update_str = device.get("last_update")
+                try:
+                    last_update = parser.isoparse(last_update_str)
+                    device["is_inactive"] = (now - last_update > threshold)
+                except:
+                    device["is_inactive"] = True  # Assume inactive if timestamp is bad
+
+            return jsonify(results)
+        else:
             return jsonify({'error': 'No scan results found'}), 404
-
-        try:
-            results = load_mac_scan_data('mac_scan_results.json')
-        except ValueError as ve:
-            return jsonify({'error': str(ve)}), 500
-
-        # Clean up and classify
-        cleaned_results = []
-        for entry in results:
-            if isinstance(entry, dict):
-                cleaned_entry = {k: v for k, v in entry.items() if k != "available_fields"}
-                cleaned_results.append(cleaned_entry)
-
-       # Compute mobility classification using "100m in 6h" rule
-        movement_map = compute_movement_by_mac(cleaned_results)
-
-        for entry in cleaned_results:
-            mac = entry.get("mac")
-            movement_status = movement_map.get(mac, "unknown")
-            entry["movement"] = movement_status
-
-        return jsonify({"results": cleaned_results})
-
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+    
 
 
 
@@ -850,7 +957,7 @@ def show_mac_results():
         with open('mac_scan_results.json', 'r') as f:
             data = json.load(f)
         results = data.get("results", [])
-        # Remove 'available_fields' from each entry (just in case)
+        # Remove 'available_fields' from each entry
         cleaned_results = [
             {k: v for k, v in entry.items() if k != "available_fields"}
             for entry in results
@@ -858,6 +965,208 @@ def show_mac_results():
         return render_template("mac_results.html", results=cleaned_results)
     except Exception as e:
         return f"Error loading MAC scan results: {e}", 500
+
+
+@app.route('/api/grid_coverage')
+def grid_coverage():
+    try:
+        with open('mac_scan_results.json', 'r') as f:
+            data = json.load(f)
+        results = data.get("results", [])
+        if not isinstance(results, list):
+            raise ValueError("Unexpected JSON structure: 'results' is not a list")
+
+        covered_cells = set()
+        for entry in results:
+            loc = entry.get("location")
+            if loc:
+                lat, lon = loc.get("lat"), loc.get("lng")
+                if lat is not None and lon is not None:
+                    cell = assign_grid_cell(lat, lon)
+                    covered_cells.add(cell)
+
+        features = []
+        for lat, lon in covered_cells:
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [lon, lat],
+                        [lon + 0.009, lat],
+                        [lon + 0.009, lat + 0.009],
+                        [lon, lat + 0.009],
+                        [lon, lat]
+                    ]]
+                },
+                "properties": {"cell": f"{lat},{lon}"}
+            })
+
+        return jsonify({"type": "FeatureCollection", "features": features})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/map')
+def map_page():
+    return render_template('map.html')
+
+
+@app.route('/api/grid/full')
+def full_grid():
+    grid = generate_full_grid()
+    return jsonify(grid)
+
+
+
+@app.route('/api/inactive_devices')
+def get_inactive_devices():
+    try:
+        with open('mac_scan_results.json', 'r') as f:
+            data = json.load(f)
+
+        now = datetime.utcnow()
+        inactive_threshold = timedelta(hours=1)
+
+        results = data.get("results", [])
+        inactive_devices = []
+
+        for device in results:
+            last_update_str = device.get("last_update")
+            if not last_update_str:
+                continue
+
+            try:
+                last_update = parser.isoparse(last_update_str)
+                if now - last_update > inactive_threshold:
+                    inactive_devices.append({
+                        "mac": device.get("mac"),
+                        "last_update": last_update_str,
+                        "status": "inactive"
+                    })
+            except Exception as e:
+                continue  # skip malformed timestamps
+
+        return jsonify(inactive_devices)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route('/api/uncovered_cells')
+def get_uncovered_cells():
+    try:
+        # Load data
+        with open('mac_scan_results.json', 'r') as f:
+            raw_data = json.load(f)
+            cleaned_results = raw_data.get('results', [])
+
+        # Time threshold = now - 24h
+        now = datetime.utcnow()
+        time_threshold = now - timedelta(hours=24)
+
+        # Set of covered cells in last 24h
+        covered_cells = set()
+        for device in cleaned_results:
+            timestamp_str = device.get('last_update')
+            location = device.get('location')
+            if timestamp_str and location:
+                try:
+                    ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    if ts >= time_threshold:
+                        lat, lon = location.get("lat"), location.get("lng")
+                        if lat is not None and lon is not None:
+                            cell = assign_grid_cell(lat, lon)
+                            covered_cells.add(cell)
+                except Exception as e:
+                    continue
+
+        # Generate full grid (Timisoara example area: approx 45.70–45.80 lat, 21.15–21.30 lon)
+        all_cells = set()
+        for lat in range(45700, 45800):  # 45.700 to 45.800
+            for lon in range(21150, 21300):  # 21.150 to 21.300
+                cell = (lat / 1000.0, lon / 1000.0)
+                all_cells.add(cell)
+
+        # Subtract covered cells to get uncovered
+        uncovered_cells = all_cells - covered_cells
+
+        # Convert to GeoJSON
+        features = [grid_cell_to_geojson(cell) for cell in uncovered_cells]
+        return jsonify({
+            "type": "FeatureCollection",
+            "features": features
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def frange(start, stop, step):
+    """Floating point range generator"""
+    while start < stop:
+        yield start
+        start += step
+
+
+
+@app.route('/api/mobile_suggestions')
+def mobile_suggestions():
+    try:
+        with open('mac_scan_results.json') as f:
+            data = json.load(f)
+
+        results = data.get("results", [])
+        suggestions = []
+
+        # Loop through each mobile device
+        for device in results:
+            if device.get("device_type") != "mobile":
+                continue
+
+            location = device.get("location")
+            if not location:
+                continue
+
+            lat = location.get("lat")
+            lon = location.get("lng")
+
+            if lat is None or lon is None:
+                continue
+
+            # Find the nearest uncovered grid cell
+            nearest_cell = None
+            min_distance = float('inf')
+
+            for cell in uncovered_cells:
+                cell_lat, cell_lon = cell
+                dist = haversine_distance(lat, lon, cell_lat, cell_lon)
+                if dist < min_distance:
+                    min_distance = dist
+                    nearest_cell = cell
+
+            if nearest_cell:
+                suggestions.append({
+                    "mac": device["mac"],
+                    "sensor_location": [lat, lon],
+                    "suggested_cell": list(nearest_cell),
+                    "distance_meters": round(min_distance, 2)
+                })
+
+        return jsonify(suggestions)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/menu')
+def menu():
+    return render_template('menu.html')
+
+@app.route('/downloader')
+def air_quality_downloader():
+    return render_template('downloader.html')
+
 
 
 # ============= EXISTING ROUTES (unchanged) =============
@@ -1130,3 +1439,5 @@ if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_ENV', 'production') == 'development'
     
     app.run(debug=debug_mode, host='0.0.0.0', port=port)
+
+
